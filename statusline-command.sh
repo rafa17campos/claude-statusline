@@ -65,7 +65,8 @@ orange='\033[38;2;255;176;85m'
 yellow='\033[38;2;230;200;0m'
 red='\033[38;2;235;87;87m'
 magenta='\033[38;2;198;120;221m'
-dim='\033[2m'
+dim='\033[38;2;160;160;160m'
+faint='\033[2m'
 reset='\033[0m'
 
 sep=" ${dim}│${reset} "
@@ -175,6 +176,7 @@ total_output=$(echo "$input"   | jq -r '.context_window.total_output_tokens // e
 cache_read=$(echo "$input"     | jq -r '.context_window.current_usage.cache_read_input_tokens // empty')
 cache_create=$(echo "$input"   | jq -r '.context_window.current_usage.cache_creation_input_tokens // empty')
 pr_num=$(echo "$input"         | jq -r '.pr.number // empty')
+cache_expires=$(echo "$input"  | jq -r '.prompt_cache.expires_at // empty')
 
 # ===== Background git fetch =====
 # Keeps unpushed/unpulled counts current. Debounced per branch via a lock
@@ -260,7 +262,7 @@ if [ -n "$branch" ]; then
     git_str="${dim}⎇${reset} ${magenta}${branch}${reset}"
     porcelain=$(git -C "$cwd" --no-optional-locks status --porcelain 2>/dev/null)
     if [ -z "$porcelain" ]; then
-        git_str+=" ${green}${dim}✓${reset}"
+        git_str+=" ${green}${faint}✓${reset}"
     else
         staged=$(  printf '%s\n' "$porcelain" | awk '/^[MADRC]/'        | wc -l | tr -d ' ')
         modified=$(printf '%s\n' "$porcelain" | awk '/^.[MD]/'          | wc -l | tr -d ' ')
@@ -341,6 +343,37 @@ if [ -n "$rl_seven" ]; then
     fi
 fi
 
+# Last interaction — transcript mtime. Used for the cache TTL countdown and
+# the last-interaction clock.
+last_ts=""
+[ -n "$transcript_path" ] && [ -f "$transcript_path" ] && \
+    last_ts=$(stat -c %Y "$transcript_path" 2>/dev/null || stat -f %m "$transcript_path" 2>/dev/null)
+
+# Prompt cache TTL countdown — minutes until the cache written by the last
+# request expires. Uses the native prompt_cache.expires_at when present;
+# otherwise estimates from the transcript mtime (1h TTL on Pro/Max, 5m on
+# API plans, override with CLAUDE_CACHE_TTL in seconds).
+ttl_str=""
+cache_ttl_raw=$(echo "$input" | jq -r '.prompt_cache.ttl // empty')
+case "$cache_ttl_raw" in 5m) cache_ttl=300 ;; 1h) cache_ttl=3600 ;; *) cache_ttl="" ;; esac
+if [ -z "$cache_ttl" ]; then
+    if [ -n "$CLAUDE_CACHE_TTL" ]; then cache_ttl="$CLAUDE_CACHE_TTL"
+    elif [ -n "$rl_five" ] || [ -n "$rl_seven" ]; then cache_ttl=3600
+    else cache_ttl=300; fi
+fi
+[ -z "$cache_expires" ] && [ -n "$last_ts" ] && cache_expires=$(( last_ts + cache_ttl ))
+if [ -n "$cache_expires" ]; then
+    ttl_left=$(( cache_expires - now ))
+    if [ "$ttl_left" -le 0 ]; then
+        ttl_str=" ${red}ttl ✗${reset}"
+    else
+        ttl_m=$(( (ttl_left + 59) / 60 ))
+        if [ $(( ttl_left * 5 )) -le "$cache_ttl" ]; then ttl_color="$orange"
+        else ttl_color="$dim"; fi
+        ttl_str=" ${ttl_color}ttl $(fmt_time "$ttl_m")${reset}"
+    fi
+fi
+
 # Cache hit rate — also shown alongside rate limits
 if [ -n "$rl_five" ] || [ -n "$rl_seven" ]; then
     cache_total=$(( ${cache_read:-0} + ${cache_create:-0} ))
@@ -349,7 +382,7 @@ if [ -n "$rl_five" ] || [ -n "$rl_seven" ]; then
         if   [ "$hit_pct" -ge 80 ]; then cache_color="$green"
         elif [ "$hit_pct" -ge 50 ]; then cache_color="$cyan"
         else cache_color="$orange"; fi
-        addu "${dim}cache${reset} ${cache_color}${hit_pct}%${reset}"
+        addu "${dim}cache${reset} ${cache_color}${hit_pct}%${reset}${ttl_str}"
     fi
 fi
 
@@ -373,7 +406,7 @@ if [ -z "$rl_five" ] && [ -z "$rl_seven" ] && [ -n "$cost_usd" ]; then
         if   [ "$hit_pct" -ge 80 ]; then cache_color="$green"
         elif [ "$hit_pct" -ge 50 ]; then cache_color="$cyan"
         else cache_color="$orange"; fi
-        addu "${cost_str}${sep}${dim}cache${reset} ${cache_color}${hit_pct}%${reset}"
+        addu "${cost_str}${sep}${dim}cache${reset} ${cache_color}${hit_pct}%${reset}${ttl_str}"
         cost_str=""
     fi
 
@@ -422,11 +455,8 @@ if [ -z "$rl_five" ] && [ -z "$rl_seven" ] && [ -n "$cost_usd" ]; then
     fi
 fi
 
-# Last interaction time — transcript mtime, shown next to cache on the usage
-# line — followed by the next 5h rate-limit reset clock time.
-last_ts=""
-[ -n "$transcript_path" ] && [ -f "$transcript_path" ] && \
-    last_ts=$(stat -f %m "$transcript_path" 2>/dev/null || stat -c %Y "$transcript_path" 2>/dev/null)
+# Last interaction time, shown next to cache on the usage line — followed by
+# the next 5h rate-limit reset clock time.
 clock_str=""
 [ -n "$last_ts" ] && clock_str="${dim}$(fmt_clock "$last_ts")${reset}"
 

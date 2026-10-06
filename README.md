@@ -53,11 +53,12 @@ Three lines: identity (profile, model, effort, branch, context), usage (rate lim
 - **5h rate limit** — `time_until_reset:used%:on_pace%↓` format, color-coded by usage
 - **7d rate limit** — same format, cyan
 - **Cache hit rate** — `cache 99%`, ratio of cached input tokens to total. Green ≥80%, cyan ≥50%, orange below
+- **Cache TTL** — `ttl 42m`, minutes until the prompt cache from the last request expires, from the native `prompt_cache.expires_at` field (Claude Code v2.1.251+). Orange in the last 20% of the TTL, red `ttl ✗` once expired, meaning the next message re-writes the whole context at full price. On older versions it's estimated from the transcript's last write, with a 1h TTL on Pro/Max and 5m on API plans (override with `CLAUDE_CACHE_TTL=<seconds>`). Set `"refreshInterval": 60` in the `statusLine` config so it counts down while idle
 - **PR number** — `PR#42` (blue), open pull request for the current branch. Read directly from the statusline JSON's `pr.number` field (Claude Code resolves this natively), so it needs no `gh` calls or caching. Absent until a PR is found, and removed once it merges or closes
 
 ### API/enterprise plans
 
-When `rate_limits` is absent, the script shows cost metrics instead. Example: `$2.13 71.00/hr │ cache 96% │ $.02/kt +196 │ $34.63/50 12m`
+When `rate_limits` is absent, the script shows cost metrics instead. Example: `$2.13 71.00/hr │ cache 96% ttl 3m │ $.02/kt +196 │ $34.63/50 12m`
 
 - **Session cost** — `$2.13`, total cost of the current conversation
 - **Active burn rate** — `71.00/hr`, dollars per hour of API time (not wall clock, so idle time doesn't skew it)
