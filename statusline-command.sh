@@ -87,11 +87,15 @@ fmt_tokens() {
     else printf '%d' "$n"; fi
 }
 
-# epoch seconds → local clock time (HH:MM). BSD date -r, GNU date -d fallback.
+# epoch seconds → local clock time (HH:MM), prefixed with the weekday
+# (e.g. "Thu 14:30") when not today. BSD date -r, GNU date -d fallback.
 fmt_clock() {
-    local ts="$1"
+    local ts="$1" fmt="+%H:%M"
     [ -z "$ts" ] && return
-    date -r "$ts" +%H:%M 2>/dev/null || date -d "@$ts" +%H:%M 2>/dev/null
+    local day
+    day=$(date -r "$ts" +%Y%m%d 2>/dev/null || date -d "@$ts" +%Y%m%d 2>/dev/null)
+    [ "$day" != "$(date +%Y%m%d)" ] && fmt="+%a %H:%M"
+    date -r "$ts" "$fmt" 2>/dev/null || date -d "@$ts" "$fmt" 2>/dev/null
 }
 
 # projected% = used% × duration / elapsed

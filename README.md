@@ -118,7 +118,7 @@ Each rate limit reads `time_until_reset:used%:on_pace%↓`. The third figure is 
 
 The arrow projects usage at reset time:
 
-- `↑` red — burning fast, will exhaust the limit before reset. Followed by the wall-clock time you'll hit 100% at the current pace (e.g. `↑ 16:20` = limit reached around 16:20). Color reflects urgency: red if under 33% of the window remains, orange under 66%, green otherwise
+- `↑` red — burning fast, will exhaust the limit before reset. Followed by the wall-clock time you'll hit 100% at the current pace (e.g. `↑ 16:20` = limit reached around 16:20; prefixed with the weekday when not today, e.g. `↑ Thu 16:20`). Color reflects urgency: red if under 33% of the window remains, orange under 66%, green otherwise
 - `→` yellow — on pace, roughly at 100% by reset. Also shows the projected exhaustion time
 - `↓` green — under-consuming, won't hit the limit (no time shown)
 
