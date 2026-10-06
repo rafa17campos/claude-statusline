@@ -79,6 +79,14 @@ fmt_time() {
     [ "$m" -gt 99 ] && echo "$((m / 60))h" || echo "${m}m"
 }
 
+# token count → compact form: 850, 45k, 1.2M
+fmt_tokens() {
+    local n="$1"
+    if   [ "$n" -ge 1000000 ]; then printf '%d.%dM' $(( n / 1000000 )) $(( n % 1000000 / 100000 ))
+    elif [ "$n" -ge 1000 ];    then printf '%dk' $(( n / 1000 ))
+    else printf '%d' "$n"; fi
+}
+
 # epoch seconds → local clock time (HH:MM). BSD date -r, GNU date -d fallback.
 fmt_clock() {
     local ts="$1"
@@ -114,13 +122,16 @@ pace_arrow() {
     [ -n "$time_left_m" ] && \
         time_left_fmt=" ${time_color}$(fmt_clock $(( now + time_left_m * 60 )))${reset}"
 
-    if   [ "$projected" -gt 115 ]; then arrow_str="${red}↑${reset}"
-    elif [ "$projected" -gt 85  ]; then arrow_str="${yellow}→${reset}"
-    else                                 arrow_str="${green}↓${reset}"; time_left_fmt=""
+    # The on-pace reference % shares the arrow's color, so the margin
+    # between used% and on-pace% reads at a glance.
+    local pace_color
+    if   [ "$projected" -gt 115 ]; then pace_color="$red";    arrow_str="${red}↑${reset}"
+    elif [ "$projected" -gt 85  ]; then pace_color="$yellow"; arrow_str="${yellow}→${reset}"
+    else pace_color="$green"; arrow_str="${green}↓${reset}"; time_left_fmt=""
     fi
 
     pace_str=""
-    [ -n "$pace_pct" ] && pace_str=":${dim}${pace_pct}%${reset}"
+    [ -n "$pace_pct" ] && pace_str=":${pace_color}${pace_pct}%${reset}"
 
     printf '%s' "${pace_str}${arrow_str}${time_left_fmt}"
 }
@@ -129,9 +140,43 @@ add()  { [ -z "$out" ]   && out+="$1"   || out+="${sep}$1"; }
 addu() { [ -z "$usage" ] && usage+="$1" || usage+="${sep}$1"; }
 
 # ===== Extract data =====
-model=$(echo "$input" | jq -r '.model.display_name // empty')
-cwd=$(echo "$input"   | jq -r '.workspace.current_dir // .cwd // empty')
-used=$(echo "$input"  | jq -r '.context_window.used_percentage // empty')
+# One jq pass for every field. Fields are joined with the ASCII unit
+# separator (not tab/space) so empty values don't collapse in `read`.
+IFS=$'\x1f' read -r -d '' \
+    model cwd used \
+    rl_five rl_seven rl_resets_5h rl_resets_7d \
+    cost_usd duration_ms api_duration_ms lines_added lines_removed \
+    session_id transcript_path effort_level agent_name \
+    total_input total_output cache_read cache_create pr_num \
+    cache_expires cache_ttl_raw cache_recache cache_misses cache_miss_cause \
+    < <(printf '%s' "$input" | jq -j '[
+        .model.display_name,
+        (.workspace.current_dir // .cwd),
+        .context_window.used_percentage,
+        .rate_limits.five_hour.used_percentage,
+        .rate_limits.seven_day.used_percentage,
+        .rate_limits.five_hour.resets_at,
+        .rate_limits.seven_day.resets_at,
+        .cost.total_cost_usd,
+        .cost.total_duration_ms,
+        .cost.total_api_duration_ms,
+        .cost.total_lines_added,
+        .cost.total_lines_removed,
+        .session_id,
+        .transcript_path,
+        .effort.level,
+        .agent.name,
+        .context_window.total_input_tokens,
+        .context_window.total_output_tokens,
+        .context_window.current_usage.cache_read_input_tokens,
+        .context_window.current_usage.cache_creation_input_tokens,
+        .pr.number,
+        .prompt_cache.expires_at,
+        .prompt_cache.ttl,
+        .prompt_cache.recache_tokens_if_cold,
+        .prompt_cache.misses,
+        .prompt_cache.last_miss_cause.causes[0]?
+    ] | map(. // "" | tostring) | join("\u001f")')
 
 # "Claude Opus 4.6 (1M context)" → "Opus 4.6 (1M)"
 model="${model#Claude }"
@@ -155,28 +200,8 @@ branch=""
 [ -n "$cwd" ] && branch=$(git -C "$cwd" --no-optional-locks symbolic-ref --short HEAD 2>/dev/null)
 
 now=$(date +%s)
-rl_five=$(echo "$input"      | jq -r '.rate_limits.five_hour.used_percentage // empty')
-rl_seven=$(echo "$input"     | jq -r '.rate_limits.seven_day.used_percentage // empty')
-rl_resets_5h=$(echo "$input" | jq -r '.rate_limits.five_hour.resets_at // empty')
-rl_resets_7d=$(echo "$input" | jq -r '.rate_limits.seven_day.resets_at // empty')
-
-cost_usd=$(echo "$input"       | jq -r '.cost.total_cost_usd // empty')
-duration_ms=$(echo "$input"    | jq -r '.cost.total_duration_ms // empty')
-api_duration_ms=$(echo "$input"| jq -r '.cost.total_api_duration_ms // empty')
-lines_added=$(echo "$input"    | jq -r '.cost.total_lines_added // empty')
-lines_removed=$(echo "$input"  | jq -r '.cost.total_lines_removed // empty')
-session_id=$(echo "$input"     | jq -r '.session_id // empty')
-transcript_path=$(echo "$input"| jq -r '.transcript_path // empty')
 transcript_file="${transcript_path##*/}"
 transcript_file="${transcript_file%.jsonl}"
-effort_level=$(echo "$input"   | jq -r '.effort.level // empty')
-agent_name=$(echo "$input"     | jq -r '.agent.name // empty')
-total_input=$(echo "$input"    | jq -r '.context_window.total_input_tokens // empty')
-total_output=$(echo "$input"   | jq -r '.context_window.total_output_tokens // empty')
-cache_read=$(echo "$input"     | jq -r '.context_window.current_usage.cache_read_input_tokens // empty')
-cache_create=$(echo "$input"   | jq -r '.context_window.current_usage.cache_creation_input_tokens // empty')
-pr_num=$(echo "$input"         | jq -r '.pr.number // empty')
-cache_expires=$(echo "$input"  | jq -r '.prompt_cache.expires_at // empty')
 
 # ===== Background git fetch =====
 # Keeps unpushed/unpulled counts current. Debounced per branch via a lock
@@ -353,8 +378,7 @@ last_ts=""
 # request expires. Uses the native prompt_cache.expires_at when present;
 # otherwise estimates from the transcript mtime (1h TTL on Pro/Max, 5m on
 # API plans, override with CLAUDE_CACHE_TTL in seconds).
-ttl_str=""
-cache_ttl_raw=$(echo "$input" | jq -r '.prompt_cache.ttl // empty')
+ttl_str="" ttl_left="" ttl_color=""
 case "$cache_ttl_raw" in 5m) cache_ttl=300 ;; 1h) cache_ttl=3600 ;; *) cache_ttl="" ;; esac
 if [ -z "$cache_ttl" ]; then
     if [ -n "$CLAUDE_CACHE_TTL" ]; then cache_ttl="$CLAUDE_CACHE_TTL"
@@ -365,13 +389,36 @@ fi
 if [ -n "$cache_expires" ]; then
     ttl_left=$(( cache_expires - now ))
     if [ "$ttl_left" -le 0 ]; then
+        ttl_color="$red"
         ttl_str=" ${red}ttl ✗${reset}"
     else
         ttl_m=$(( (ttl_left + 59) / 60 ))
-        if [ $(( ttl_left * 5 )) -le "$cache_ttl" ]; then ttl_color="$orange"
-        else ttl_color="$dim"; fi
+        # Green > 50% of the TTL left, yellow > 20%, orange in the last 20%
+        if   [ $(( ttl_left * 5 )) -le "$cache_ttl" ]; then ttl_color="$orange"
+        elif [ $(( ttl_left * 2 )) -le "$cache_ttl" ]; then ttl_color="$yellow"
+        else ttl_color="$green"; fi
         ttl_str=" ${ttl_color}ttl $(fmt_time "$ttl_m")${reset}"
     fi
+fi
+
+# Tokens re-cached at full write price if the cache goes cold — only shown
+# once the TTL is running out (orange) or gone (red), when it's actionable.
+if [ -n "$cache_recache" ] && [ "$cache_recache" -gt 0 ] 2>/dev/null && \
+   [ -n "$ttl_left" ] && [ $(( ttl_left * 5 )) -le "$cache_ttl" ]; then
+    ttl_str+=" ${ttl_color:-$red}($(fmt_tokens "$cache_recache"))${reset}"
+fi
+
+# Cache misses this session, with the short cause of the last one
+# (e.g. "miss 2 tools"). Hidden while there are none.
+if [ -n "$cache_misses" ] && [ "$cache_misses" -gt 0 ] 2>/dev/null; then
+    case "$cache_miss_cause" in
+        tools_changed)         miss_cause="tools" ;;
+        system_prompt_changed) miss_cause="sysprompt" ;;
+        ttl_expired_*)         miss_cause="ttl" ;;
+        likely_server_side)    miss_cause="server" ;;
+        *)                     miss_cause="$cache_miss_cause" ;;
+    esac
+    ttl_str+=" ${orange}miss ${cache_misses}${miss_cause:+ ${miss_cause}}${reset}"
 fi
 
 # Cache hit rate — also shown alongside rate limits

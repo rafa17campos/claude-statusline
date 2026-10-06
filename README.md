@@ -14,7 +14,7 @@ On API/enterprise plans (no `rate_limits` in the JSON), the script shows session
 
 Claude Code pipes a JSON object to a shell command via stdin on every render (the [`statusLine` config](https://code.claude.com/docs/en/statusline)). On Pro/Max plans this JSON includes a `rate_limits` field with 5-hour and 7-day usage percentages and reset times. On API/enterprise plans that field is absent, but `cost` data (session spend, API duration, lines changed) is available.
 
-This script parses that JSON with `jq`. Single bash file, no extra dependencies. Visual style inspired by [isaacaudet/claude-code-statusline](https://github.com/isaacaudet/claude-code-statusline).
+This script parses that JSON with a single `jq` call per render. Single bash file, no extra dependencies. Visual style inspired by [isaacaudet/claude-code-statusline](https://github.com/isaacaudet/claude-code-statusline).
 
 ## Install
 
@@ -53,7 +53,9 @@ Three lines: identity (profile, model, effort, branch, context), usage (rate lim
 - **5h rate limit** — `time_until_reset:used%:on_pace%↓` format, color-coded by usage
 - **7d rate limit** — same format, cyan
 - **Cache hit rate** — `cache 99%`, ratio of cached input tokens to total. Green ≥80%, cyan ≥50%, orange below
-- **Cache TTL** — `ttl 42m`, minutes until the prompt cache from the last request expires, from the native `prompt_cache.expires_at` field (Claude Code v2.1.251+). Orange in the last 20% of the TTL, red `ttl ✗` once expired, meaning the next message re-writes the whole context at full price. On older versions it's estimated from the transcript's last write, with a 1h TTL on Pro/Max and 5m on API plans (override with `CLAUDE_CACHE_TTL=<seconds>`). Set `"refreshInterval": 60` in the `statusLine` config so it counts down while idle
+- **Cache TTL** — `ttl 42m`, minutes until the prompt cache from the last request expires, from the native `prompt_cache.expires_at` field (Claude Code v2.1.251+). Green with more than half the TTL left, yellow above 20%, orange in the last 20%, red `ttl ✗` once expired, meaning the next message re-writes the whole context at full price. On older versions it's estimated from the transcript's last write, with a 1h TTL on Pro/Max and 5m on API plans (override with `CLAUDE_CACHE_TTL=<seconds>`). Set `"refreshInterval": 60` in the `statusLine` config so it counts down while idle
+- **Re-cache cost** — `ttl 7m (180k)`, tokens the next message re-writes at full cache-write price if the cache goes cold (`prompt_cache.recache_tokens_if_cold`). Only shown once the TTL is orange or expired, when it's worth deciding whether to send something first
+- **Cache misses** — `miss 2 tools` (orange), requests this session that re-processed content the cache already held, with the likely cause of the last one (`tools`, `sysprompt`, `ttl`, `server`). Hidden while there are none
 - **PR number** — `PR#42` (blue), open pull request for the current branch. Read directly from the statusline JSON's `pr.number` field (Claude Code resolves this natively), so it needs no `gh` calls or caching. Absent until a PR is found, and removed once it merges or closes
 
 ### API/enterprise plans
@@ -109,7 +111,7 @@ All fields are optional — if data isn't available yet, the section is skipped.
 
 ## Pace arrows
 
-Each rate limit reads `time_until_reset:used%:on_pace%↓`. The third figure is the reference: it's the `used%` you'd need to be at right now to land at exactly 100% by reset. Compare it against the second figure to see your margin at a glance.
+Each rate limit reads `time_until_reset:used%:on_pace%↓`. The third figure is the reference: it's the `used%` you'd need to be at right now to land at exactly 100% by reset. Compare it against the second figure to see your margin at a glance. It takes the arrow's color: green with headroom, yellow on pace, red ahead of pace.
 
 - `17m:8%:94%↓` — 17m until reset, 8% used, you'd need to be at 94% to be on perfect pace. Tons of headroom.
 - `17m:94%:8%↑` — flipped: 94% used with only 8% of the window elapsed. You're cooked.
